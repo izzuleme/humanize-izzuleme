@@ -1,4 +1,5 @@
 import Image from "next/image";
+import { FaWhatsapp } from "react-icons/fa";
 
 export default function Home() {
   return (
@@ -47,10 +48,11 @@ export default function Home() {
             </div>
 
             <a
-              href="/api/order"
-              className="mt-10 bg-green-500 hover:bg-green-600 duration-300 text-white text-xl font-bold py-5 rounded-2xl text-center shadow-lg hover:shadow-green-300"
-            >
-              📲 ORDER SEKARANG
+               href="/api/order"
+  className="mt-10 bg-green-500 hover:bg-green-600 duration-300 text-white text-xl font-bold py-5 rounded-2xl shadow-lg hover:shadow-green-300 flex items-center justify-center gap-3"
+>
+  <FaWhatsapp size={28} />
+  <span>Order Sekarang</span>
             </a>
 
           </div>
