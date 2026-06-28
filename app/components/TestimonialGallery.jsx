@@ -1,14 +1,14 @@
 import Image from "next/image";
 
 const reviews = [
-  "/testimonials/review1.jpg",
-  "/testimonials/review2.jpg",
-  "/testimonials/review3.jpg",
-  "/testimonials/review4.jpg",
-  "/testimonials/review5.jpg",
-  "/testimonials/review6.jpg",
-  "/testimonials/review7.jpg",
-  "/testimonials/review8.jpg",
+  "/testimonials/review 1.jpg",
+  "/testimonials/review 2.jpg",
+  "/testimonials/review 3.jpg",
+  "/testimonials/review 4.jpg",
+  "/testimonials/review 5.jpg",
+  "/testimonials/review 6.jpg",
+  "/testimonials/review 7.jpg",
+  "/testimonials/review 8.jpg",
 ];
 
 export default function TestimonialGallery() {
