@@ -4,6 +4,7 @@ import Stats from "./components/Stats";
 import HowItWorks from "./components/HowItWorks";
 import BeforeAfter from "./components/BeforeAfter";
 import TestimonialGallery from "./components/TestimonialGallery";
+import Pricing from "./components/Pricing";
 
 export default function Home() {
  return (
