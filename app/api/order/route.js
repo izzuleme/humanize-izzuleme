@@ -7,58 +7,82 @@ const supabase = createClient(
 );
 
 export async function GET() {
-  // Ambil giliran semasa
-  const { data: rotation, error: rotationError } = await supabase
-    .from("rotation")
-    .select("*")
-    .eq("id", 1)
-    .single();
+  try {
+    // Ambil worker yang ACTIVE sahaja
+    const { data: workers, error: workersError } = await supabase
+      .from("workers")
+      .select("*")
+      .eq("active", true)
+      .order("id", { ascending: true });
 
-  if (rotationError) {
-    return NextResponse.json(rotationError, { status: 500 });
-  }
+    if (workersError) {
+      return NextResponse.json(workersError, { status: 500 });
+    }
 
-  const currentWorker = rotation.current_worker;
+    // Kalau tak ada worker aktif
+    if (!workers || workers.length === 0) {
+      return NextResponse.json(
+        { error: "Tiada worker yang sedang aktif." },
+        { status: 404 }
+      );
+    }
 
-  // Ambil worker
-  const { data: worker, error: workerError } = await supabase
-    .from("workers")
-    .select("*")
-    .eq("id", currentWorker)
-    .single();
+    // Ambil giliran semasa
+    const { data: rotation, error: rotationError } = await supabase
+      .from("rotation")
+      .select("*")
+      .eq("id", 1)
+      .single();
 
-  if (workerError) {
-    return NextResponse.json(workerError, { status: 500 });
-  }
+    if (rotationError) {
+      return NextResponse.json(rotationError, { status: 500 });
+    }
 
-  // Tambah order worker
-  await supabase
-    .from("workers")
-    .update({
-      orders: worker.orders + 1,
-    })
-    .eq("id", currentWorker);
+    const currentWorkerId = rotation.current_worker;
 
-  // Kira worker seterusnya
-  const { count } = await supabase
-    .from("workers")
-    .select("*", { count: "exact", head: true });
+    // Cari worker semasa dalam senarai worker aktif
+    let currentIndex = workers.findIndex(
+      (worker) => worker.id === currentWorkerId
+    );
 
-  let nextWorker = currentWorker + 1;
+    // Kalau worker dalam rotation dah tak aktif / dah delete
+    if (currentIndex === -1) {
+      currentIndex = 0;
+    }
 
-  if (nextWorker > count) {
-    nextWorker = 1;
-  }
+    // Worker yang akan terima customer sekarang
+    const worker = workers[currentIndex];
 
-  // Update rotation
-  await supabase
-    .from("rotation")
-    .update({
-      current_worker: nextWorker,
-    })
-    .eq("id", 1);
+    // Tambah jumlah order worker
+    const { error: updateOrderError } = await supabase
+      .from("workers")
+      .update({
+        orders: (worker.orders || 0) + 1,
+      })
+      .eq("id", worker.id);
 
-  const text = `Hi, saya nak order Humanize English.
+    if (updateOrderError) {
+      return NextResponse.json(updateOrderError, { status: 500 });
+    }
+
+    // Cari worker aktif seterusnya
+    const nextIndex = (currentIndex + 1) % workers.length;
+    const nextWorker = workers[nextIndex];
+
+    // Simpan giliran baru
+    const { error: updateRotationError } = await supabase
+      .from("rotation")
+      .update({
+        current_worker: nextWorker.id,
+      })
+      .eq("id", 1);
+
+    if (updateRotationError) {
+      return NextResponse.json(updateRotationError, { status: 500 });
+    }
+
+    // Template WhatsApp
+    const message = `Hi, saya nak order Humanize English.
 
 From page ? to ? :
 Ayat (Academic / Standard) :
@@ -68,11 +92,17 @@ Phone number :
 
 📎 Saya akan hantar assignment selepas isi template ini.`;
 
-  const url =
-    "https://wa.me/" +
-    worker.phone +
-    "?text=" +
-    encodeURIComponent(text);
+    const whatsappUrl =
+      `https://wa.me/${worker.phone}?text=${encodeURIComponent(message)}`;
 
-  return NextResponse.redirect(url);
+    return NextResponse.redirect(whatsappUrl);
+
+  } catch (error) {
+    console.error(error);
+
+    return NextResponse.json(
+      { error: "Server error" },
+      { status: 500 }
+    );
+  }
 }

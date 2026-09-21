@@ -5,6 +5,8 @@ import HowItWorks from "./components/HowItWorks";
 import BeforeAfter from "./components/BeforeAfter";
 import TestimonialGallery from "./components/TestimonialGallery";
 import Pricing from "./components/Pricing";
+import FAQ from "./components/FAQ";
+import FloatingWhatsapp from "./components/FloatingWhatsapp";
 
 export default function Home() {
  return (
