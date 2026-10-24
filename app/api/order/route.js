@@ -1,26 +1,27 @@
-import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { cleanPhone, eligibleWorkers, pickTurn } from "@/lib/rotation";
 
 export async function GET() {
   try {
-    // Ambil worker yang ACTIVE sahaja
-    const { data: workers, error: workersError } = await supabase
+    const supabase = getSupabaseAdmin();
+
+    // Ambil worker yang ACTIVE sahaja (dan ada nombor telefon yang sah)
+    const { data: activeWorkers, error: workersError } = await supabase
       .from("workers")
       .select("*")
       .eq("active", true)
       .order("id", { ascending: true });
 
     if (workersError) {
-      return NextResponse.json(workersError, { status: 500 });
+      console.error("rotation: workers query failed:", workersError.code);
+      return NextResponse.json({ error: "Server error" }, { status: 500 });
     }
 
+    const workers = eligibleWorkers(activeWorkers);
+
     // Kalau tak ada worker aktif
-    if (!workers || workers.length === 0) {
+    if (workers.length === 0) {
       return NextResponse.json(
         { error: "Tiada worker yang sedang aktif." },
         { status: 404 }
@@ -35,23 +36,17 @@ export async function GET() {
       .single();
 
     if (rotationError) {
-      return NextResponse.json(rotationError, { status: 500 });
+      console.error("rotation: rotation query failed:", rotationError.code);
+      return NextResponse.json({ error: "Server error" }, { status: 500 });
     }
 
-    const currentWorkerId = rotation.current_worker;
-
-    // Cari worker semasa dalam senarai worker aktif
-    let currentIndex = workers.findIndex(
-      (worker) => worker.id === currentWorkerId
+    // Worker yang akan terima customer sekarang + worker seterusnya.
+    // Kalau worker dalam rotation dah tak aktif / dah delete, teruskan dengan
+    // worker aktif yang id-nya selepas itu (id tidak semestinya berturutan).
+    const { current: worker, next: nextWorker } = pickTurn(
+      workers,
+      rotation.current_worker
     );
-
-    // Kalau worker dalam rotation dah tak aktif / dah delete
-    if (currentIndex === -1) {
-      currentIndex = 0;
-    }
-
-    // Worker yang akan terima customer sekarang
-    const worker = workers[currentIndex];
 
     // Tambah jumlah order worker
     const { error: updateOrderError } = await supabase
@@ -62,12 +57,9 @@ export async function GET() {
       .eq("id", worker.id);
 
     if (updateOrderError) {
-      return NextResponse.json(updateOrderError, { status: 500 });
+      console.error("rotation: order count update failed:", updateOrderError.code);
+      return NextResponse.json({ error: "Server error" }, { status: 500 });
     }
-
-    // Cari worker aktif seterusnya
-    const nextIndex = (currentIndex + 1) % workers.length;
-    const nextWorker = workers[nextIndex];
 
     // Simpan giliran baru
     const { error: updateRotationError } = await supabase
@@ -78,7 +70,8 @@ export async function GET() {
       .eq("id", 1);
 
     if (updateRotationError) {
-      return NextResponse.json(updateRotationError, { status: 500 });
+      console.error("rotation: rotation update failed:", updateRotationError.code);
+      return NextResponse.json({ error: "Server error" }, { status: 500 });
     }
 
     // Template WhatsApp
@@ -87,13 +80,14 @@ export async function GET() {
 From page ? to ? :
 Ayat (Academic / Standard) :
 Nak siap before? :
+Turnitin (YES (similarity or ai?) / NO (Humanize Only) :
 Total pages :
 Phone number :
 
 📎 Saya akan hantar assignment selepas isi template ini.`;
 
     const whatsappUrl =
-      `https://wa.me/${worker.phone}?text=${encodeURIComponent(message)}`;
+      `https://wa.me/${cleanPhone(worker.phone)}?text=${encodeURIComponent(message)}`;
 
     return NextResponse.redirect(whatsappUrl);
 
