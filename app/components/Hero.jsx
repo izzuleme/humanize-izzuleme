@@ -84,14 +84,14 @@ export default function Hero() {
 
       </div>
 
-      {/* Button */}
-      <a
-        href="/api/order"
-        className="mt-10 bg-green-500 hover:bg-green-600 duration-300 text-white text-xl font-bold py-5 rounded-2xl shadow-lg hover:shadow-green-300 flex items-center justify-center gap-3"
-      >
-        <FaWhatsapp size={28} />
-        <span>Order via WhatsApp</span>
-      </a>
+      {/* Order Button */}
+<a
+  href="/login"
+  className="mt-10 bg-blue-600 hover:bg-blue-700 duration-300 text-white text-xl font-bold py-5 rounded-2xl shadow-lg hover:shadow-blue-300 flex items-center justify-center gap-3"
+>
+  <span>Order Now</span>
+  <span>→</span>
+</a>
 
       {/* Social Proof */}
       <div className="flex items-center gap-3 mt-8">
