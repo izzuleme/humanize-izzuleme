@@ -1,149 +1,59 @@
-import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
-import { requirePageRole } from "@/lib/guards";
-import { isCompleted } from "@/lib/orderConfig";
-import LogoutButton from "@/app/components/LogoutButton";
+import Link from "next/link";
+import { db } from "@/lib/supabaseAdmin";
+import { requireRole } from "@/lib/auth";
+import { Shell, Card, Stat, Badge, Table, Th, Td } from "@/app/components/portal/ui";
+import { AvailabilityToggle } from "@/app/components/portal/WorkerForms";
+import { workerNav } from "../nav";
+import { fmtDateTime, startOfTodayISO, money, groupPayroll, dayKey, weekKey, monthKey } from "@/lib/time";
 
 export const dynamic = "force-dynamic";
 
-// Price is intentionally not selected: workers do not need revenue data.
-const WORKER_ORDER_COLUMNS =
-  "id, order_number, customer_phone, customer_country, pages, status, payment_status, file_url, result_url, created_at, assigned_at, completed_at";
-
-function formatDate(value) {
-  if (!value) return "-";
-  return new Date(value).toLocaleString("en-MY", {
-    timeZone: "Asia/Kuala_Lumpur",
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
-export default async function WorkerDashboard() {
-  // Server-side guard: only a valid WORKER session gets in. The worker id comes
-  // from the database-verified session, never from the browser.
-  const session = await requirePageRole("worker");
-
-  const supabase = getSupabaseAdmin();
-
-  const [workerRes, ordersRes] = await Promise.all([
-    supabase
-      .from("workers")
-      .select("id, name, active, orders")
-      .eq("id", session.workerId)
-      .maybeSingle(),
-    supabase
-      .from("orders")
-      .select(WORKER_ORDER_COLUMNS)
-      .eq("worker_id", session.workerId)
-      .order("created_at", { ascending: false })
-      .limit(200),
+export default async function Page() {
+  const s = await requireRole(["worker"]);
+  const [{ data: w }, { data: orders }, { data: pay }] = await Promise.all([
+    db.from("workers").select("*").eq("id", s.workerId).single(),
+    db.from("orders").select("id,order_no,title,pages,deadline,status,assigned_at,approved_at").eq("worker_id", s.workerId).order("deadline"),
+    db.from("payroll_entries").select("earned_at,amount").eq("worker_id", s.workerId).order("earned_at", { ascending: false }).limit(2000),
   ]);
-
-  for (const r of [workerRes, ordersRes]) {
-    if (r.error) console.error("worker dashboard query failed:", r.error.code);
-  }
-
-  const worker = workerRes.data;
-  const orders = ordersRes.data || [];
-  const completed = orders.filter(isCompleted).length;
-  const pending = orders.length - completed;
+  const today = startOfTodayISO();
+  const todays = orders.filter((o) => o.assigned_at && o.assigned_at >= today && o.status !== "cancelled");
+  const open = orders.filter((o) => ["assigned", "in_progress", "revision_requested"].includes(o.status));
+  const waiting = orders.filter((o) => o.status === "delivered");
+  const done = orders.filter((o) => o.status === "approved");
+  const now = new Date();
+  const sum = (keyFn, k) => groupPayroll(pay, keyFn, 1000).find((g) => g.key === k)?.total || 0;
 
   return (
-    <main className="min-h-screen bg-slate-100 p-8">
-
-      <div className="flex items-center justify-between mb-8 gap-4 flex-wrap">
-        <h1 className="text-4xl font-black">
-          {worker?.name ? `${worker.name} Dashboard` : "Worker Dashboard"}
-        </h1>
-        <div className="flex items-center gap-4">
-          <span className="text-gray-500">{session.username}</span>
-          <LogoutButton />
-        </div>
+    <Shell session={s} title="Worker Portal" nav={workerNav}>
+      <div className="flex flex-wrap items-center gap-4">
+        <h1 className="text-3xl font-black">Hi, {s.name}</h1>
+        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${w.is_available ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-700"}`}>
+          {w.is_available ? "Available" : "Unavailable"}
+        </span>
+        <AvailabilityToggle available={w.is_available} />
       </div>
-
-      {(workerRes.error || ordersRes.error) && (
-        <p className="mb-6 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 p-3">
-          Sebahagian data gagal dimuat. Sila cuba lagi.
-        </p>
-      )}
-
-      <div className="grid md:grid-cols-4 gap-6">
-        <div className="bg-white rounded-2xl p-6 shadow">
-          <h2 className="text-gray-500">My Orders</h2>
-          <p className="text-4xl font-bold mt-3">{orders.length}</p>
-        </div>
-
-        <div className="bg-white rounded-2xl p-6 shadow">
-          <h2 className="text-gray-500">Pending</h2>
-          <p className="text-4xl font-bold mt-3">{pending}</p>
-        </div>
-
-        <div className="bg-white rounded-2xl p-6 shadow">
-          <h2 className="text-gray-500">Completed</h2>
-          <p className="text-4xl font-bold mt-3">{completed}</p>
-        </div>
-
-        <div className="bg-white rounded-2xl p-6 shadow">
-          <h2 className="text-gray-500">WhatsApp Leads</h2>
-          <p className="text-4xl font-bold mt-3">{worker?.orders ?? 0}</p>
-          <p className="text-sm text-gray-500 mt-1">
-            {worker?.active ? "You are receiving customers" : "Currently not receiving customers"}
-          </p>
-        </div>
+      <div className="grid gap-6 md:grid-cols-4">
+        <Stat label="Orders today" value={`${todays.length} / ${w.max_orders_per_day}`} />
+        <Stat label="Pages today" value={`${todays.reduce((a, o) => a + o.pages, 0)} / ${w.max_pages_per_day}`} sub={`Hours ${w.work_start.slice(0, 5)}–${w.work_end.slice(0, 5)}`} />
+        <Stat label="Earned today" value={money(sum(dayKey, dayKey(now)))} />
+        <Stat label="Earned this month" value={money(sum(monthKey, monthKey(now)))} sub={`This week ${money(sum(weekKey, weekKey(now)))}`} />
       </div>
-
-      <section className="bg-white rounded-2xl p-6 shadow mt-8">
-        <h2 className="text-2xl font-black mb-4">My Orders</h2>
-
-        {orders.length === 0 ? (
-          <p className="text-gray-500">Belum ada order untuk anda.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="text-gray-500 border-b">
-                  <th className="py-2 pr-4">Order</th>
-                  <th className="py-2 pr-4">Customer</th>
-                  <th className="py-2 pr-4">Pages</th>
-                  <th className="py-2 pr-4">Status</th>
-                  <th className="py-2 pr-4">Payment</th>
-                  <th className="py-2 pr-4">Files</th>
-                  <th className="py-2 pr-4">Assigned</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orders.map((o) => (
-                  <tr key={o.id} className="border-b last:border-0 text-slate-900">
-                    <td className="py-2 pr-4 font-semibold">{o.order_number || `#${o.id}`}</td>
-                    <td className="py-2 pr-4">
-                      {o.customer_phone || "-"}
-                      {o.customer_country ? ` (${o.customer_country})` : ""}
-                    </td>
-                    <td className="py-2 pr-4">{o.pages ?? "-"}</td>
-                    <td className="py-2 pr-4">{o.status || (o.completed_at ? "completed" : "-")}</td>
-                    <td className="py-2 pr-4">{o.payment_status || "-"}</td>
-                    <td className="py-2 pr-4">
-                      {o.file_url && /^https?:\/\//i.test(o.file_url) ? (
-                        <a href={o.file_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline mr-3">
-                          Upload
-                        </a>
-                      ) : null}
-                      {o.result_url && /^https?:\/\//i.test(o.result_url) ? (
-                        <a href={o.result_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-                          Result
-                        </a>
-                      ) : null}
-                      {!o.file_url && !o.result_url ? "-" : null}
-                    </td>
-                    <td className="py-2 pr-4">{formatDate(o.assigned_at || o.created_at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      <Card title={`Assigned orders (${open.length})`}>
+        {!open.length ? <p className="text-slate-500">Nothing assigned right now.</p> : (
+          <Table>
+            <thead><tr><Th>#</Th><Th>Title</Th><Th>Pages</Th><Th>Deadline</Th><Th>Status</Th></tr></thead>
+            <tbody>{open.map((o) => (
+              <tr key={o.id}><Td>{o.order_no}</Td><Td><Link className="font-semibold text-blue-700 hover:underline" href={`/worker/orders/${o.id}`}>{o.title}</Link></Td>
+                <Td>{o.pages}</Td><Td>{fmtDateTime(o.deadline)}</Td><Td><Badge status={o.status} /></Td></tr>))}</tbody>
+          </Table>
         )}
-      </section>
-
-    </main>
+      </Card>
+      <Card title={`Delivered, awaiting admin approval (${waiting.length})`}>
+        {waiting.length ? <ul className="text-sm">{waiting.map((o) => <li key={o.id}><Link className="text-blue-700 hover:underline" href={`/worker/orders/${o.id}`}>#{o.order_no} {o.title}</Link></li>)}</ul> : <p className="text-slate-500">None.</p>}
+      </Card>
+      <Card title={`Completed orders (${done.length})`}>
+        {done.length ? <ul className="text-sm">{done.slice(0, 20).map((o) => <li key={o.id}>#{o.order_no} {o.title} · {o.pages} pages · approved {fmtDateTime(o.approved_at)}</li>)}</ul> : <p className="text-slate-500">None yet.</p>}
+      </Card>
+    </Shell>
   );
 }

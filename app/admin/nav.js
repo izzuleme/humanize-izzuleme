@@ -1,0 +1,1 @@
+export const adminNav = [["/admin/dashboard", "Dashboard"], ["/admin/payments", "Payments"], ["/admin/orders", "Orders"], ["/admin/workers", "Workers"], ["/admin/payroll", "Payroll"], ["/admin/settings", "Payment settings"]];
