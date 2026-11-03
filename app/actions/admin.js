@@ -15,9 +15,11 @@ export async function createWorkerAction(_prev, fd) {
   const s = await requireRole(["admin"]);
   const username = String(fd.get("username") || "").trim();
   const displayName = String(fd.get("display_name") || "").trim().slice(0, 80);
+  const email = String(fd.get("email") || "").trim().toLowerCase();
   const phone = String(fd.get("phone") || "").replace(/[^\d]/g, "");
   let pw = String(fd.get("password") || "");
   if (!/^[A-Za-z0-9._-]{3,30}$/.test(username)) return { error: "Username: 3–30 letters, numbers, . _ -" };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: "Enter a valid worker email address." };
   if (phone.length < 8 || phone.length > 15) return { error: "Enter a valid WhatsApp number with country code (digits only), e.g. 60123456789." };
   if (pw) { const e = validatePassword(pw); if (e) return { error: e }; } else pw = tempPassword();
   const st = parseWorkerSettings(fd, { withRate: true });
@@ -26,7 +28,13 @@ export async function createWorkerAction(_prev, fd) {
   const { data: dup } = await db.from("worker_accounts").select("id").ilike("username", escapeLike(username)).maybeSingle();
   if (dup) return { error: "That username is already taken." };
 
-  const { data: w, error: e1 } = await db.from("workers").insert({ phone, orders: 0, is_available: true, ...st.values }).select("id").single();
+ const { data: w, error: e1 } = await db.from("workers").insert({
+  email,
+  phone,
+  orders: 0,
+  is_available: true,
+  ...st.values,
+}).select("id").single();
   if (e1) return { error: "Could not create the worker record." };
   const { error: e2 } = await db.from("worker_accounts").insert({
     username, display_name: displayName || username, password_hash: await hashPassword(pw),
@@ -69,8 +77,21 @@ export async function adminUpdateWorkerAction(_prev, fd) {
   const st = parseWorkerSettings(fd, { withRate: true });
   if (st.error) return { error: st.error };
   const available = String(fd.get("is_available")) === "true";
-  await db.from("workers").update({ ...st.values, is_available: available }).eq("id", a.worker_id);
-  const dn = String(fd.get("display_name") || "").trim().slice(0, 80);
+const email = String(fd.get("email") || "").trim().toLowerCase();
+
+if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  return { error: "Enter a valid worker email address." };
+}
+
+await db.from("workers")
+  .update({
+    ...st.values,
+    is_available: available,
+    email: email || null,
+  })
+  .eq("id", a.worker_id);
+
+const dn = String(fd.get("display_name") || "").trim().slice(0, 80);
   if (dn) await db.from("worker_accounts").update({ display_name: dn }).eq("id", a.id);
   await db.rpc("assign_pending_orders");
   return done({ message: "Worker updated." });

@@ -11,9 +11,10 @@ export function CreateWorkerForm() {
     <ActionForm action={createWorkerAction} label="Create worker">
       <div className="grid gap-3 sm:grid-cols-2">
         <input name="username" placeholder="Username" required className={input} autoComplete="off" />
-        <input name="display_name" placeholder="Display name" className={input} />
-        <input name="phone" placeholder="WhatsApp number, e.g. 60123456789" required className={input} />
-        <input name="password" placeholder="Temporary password (blank = generate)" className={input} autoComplete="off" />
+<input name="display_name" placeholder="Display name" className={input} />
+<input name="email" type="email" placeholder="Worker email" required className={input} autoComplete="off" />
+<input name="phone" placeholder="WhatsApp number, e.g. 60123456789" required className={input} />
+<input name="password" placeholder="Temporary password (blank = generate)" className={input} autoComplete="off" />
       </div>
       <SettingsFields withRate />
     </ActionForm>
@@ -24,6 +25,15 @@ export function WorkerEditForm({ accountId, displayName, w }) {
     <ActionForm action={adminUpdateWorkerAction} fields={{ accountId }} label="Save worker">
       <label className="block text-sm font-medium text-slate-700">Display name
         <input name="display_name" defaultValue={displayName} className={input + " mt-1"} /></label>
+        <label className="block text-sm font-medium text-slate-700">Email
+  <input
+    name="email"
+    type="email"
+    defaultValue={w.email || ""}
+    placeholder="worker@example.com"
+    className={input + " mt-1"}
+  />
+</label>
       <label className="block text-sm font-medium text-slate-700">Availability
         <select name="is_available" defaultValue={String(w.is_available)} className={input + " mt-1"}>
           <option value="true">Available</option><option value="false">Unavailable</option></select></label>
