@@ -3,7 +3,11 @@ import { db } from "@/lib/supabaseAdmin";
 import { requireRole } from "@/lib/auth";
 import { isUuid } from "@/lib/validate";
 import { Shell, Card, Badge, FileList } from "@/app/components/portal/ui";
-import { DeliverForm, StartButton } from "@/app/components/portal/WorkerForms";
+import {
+  DeliverForm,
+  StartButton,
+  EstimatedTimeForm,
+} from "@/app/components/portal/WorkerForms";
 import { workerNav } from "@/app/worker/nav";
 import { fmtDateTime } from "@/lib/time";
 
@@ -15,7 +19,7 @@ export default async function Page({ params }) {
   if (!isUuid(id)) notFound();
   // Another worker's order id returns nothing: worker_id must match the session.
   const { data: o } = await db.from("orders")
-    .select("id,order_no,title,requirements,pages,from_page,to_page,style,deadline,status,delivered_at")
+    .select("id,order_no,title,requirements,pages,from_page,to_page,style,deadline,status,delivered_at,estimated_minutes,slot_start,slot_end")
     .eq("id", id).eq("worker_id", s.workerId).maybeSingle();
   if (!o) notFound();
   const [{ data: files }, { data: revs }] = await Promise.all([
@@ -34,6 +38,23 @@ export default async function Page({ params }) {
         <h3 className="mt-4 text-sm font-bold">Customer requirements</h3>
         <p className="mt-1 whitespace-pre-wrap text-sm">{o.requirements}</p>
         {o.status === "assigned" && <div className="mt-4"><StartButton orderId={o.id} /></div>}
+{["assigned", "in_progress", "revision_requested"].includes(o.status) && (
+  <div className="mt-5 border-t border-slate-200 pt-5">
+    <EstimatedTimeForm
+      orderId={o.id}
+      minutes={o.estimated_minutes}
+    />
+
+    {o.slot_start && o.slot_end && (
+      <p className="mt-3 text-sm text-slate-500">
+        Reserved work slot:{" "}
+        <span className="font-semibold text-slate-700">
+          {fmtDateTime(o.slot_start)} → {fmtDateTime(o.slot_end)}
+        </span>
+      </p>
+    )}
+  </div>
+)}
       </Card>
       {openRev && (
         <Card title={`Revision #${openRev.revision_no} requested`} className="border-l-4 border-orange-400">

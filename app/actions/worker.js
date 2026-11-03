@@ -1,4 +1,5 @@
 "use server";
+import { sendEmail } from "@/lib/email";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/supabaseAdmin";
 import { requireRole } from "@/lib/auth";
@@ -40,6 +41,28 @@ export async function deliverAction(_prev, fd) {
     .eq("id", o.id).eq("worker_id", s.workerId).in("status", ["assigned", "in_progress", "revision_requested"]);
   if (rev) await db.from("revisions").update({ status: "resolved", resolved_at: now }).eq("id", rev.id);
   await db.from("order_events").insert({ order_id: o.id, actor: `worker:${s.workerId}`, event: rev ? "revision_delivered" : "delivered" });
+// Email customer after the completed order has been delivered.
+try {
+  const { data: customer } = await db
+    .from("customers")
+    .select("email,name")
+    .eq("id", o.customer_id)
+    .maybeSingle();
+
+  if (customer?.email) {
+    await sendEmail({
+      to: customer.email,
+      subject: `Your Humanize Izzuleme order #${o.order_no} is ready`,
+      text:
+        `Hi ${customer.name || "there"},\n\n` +
+        `Good news! Your order #${o.order_no} (${o.title}) has been completed and delivered.\n\n` +
+        `You can log in to your Humanize Izzuleme customer portal to view and download your completed files.\n\n` +
+        `Thank you for using Humanize Izzuleme!`,
+    });
+  }
+} catch (emailError) {
+  console.error("Customer delivery email failed:", emailError);
+}
   revalidatePath("/", "layout");
   return { ok: true, message: "Delivered. The customer and admin can now see your files." };
 }
@@ -61,4 +84,56 @@ export async function updateMySettingsAction(_prev, fd) {
   await db.rpc("assign_pending_orders");
   revalidatePath("/", "layout");
   return { ok: true, message: "Settings saved." };
+}
+
+export async function updateOrderMinutesAction(_prev, fd) {
+  const s = await requireRole(["worker"]);
+
+  const orderId = String(fd.get("orderId") || "");
+  const minutes = Number(fd.get("minutes"));
+
+  if (!isUuid(orderId)) {
+    return { error: "Invalid order." };
+  }
+
+  if (
+    !Number.isInteger(minutes) ||
+    minutes < 5 ||
+    minutes > 1440
+  ) {
+    return {
+      error: "Estimated time must be between 5 and 1440 minutes.",
+    };
+  }
+
+  // Ownership is also checked inside the database function
+  // using the logged-in worker ID.
+  const { data, error } = await db.rpc("worker_set_order_minutes", {
+    p_order: orderId,
+    p_worker: s.workerId,
+    p_minutes: minutes,
+  });
+
+  if (error) {
+    console.error("Could not update estimated time:", error);
+
+    return {
+      error: "Could not update estimated time. Please try again.",
+    };
+  }
+
+  if (!data) {
+    return {
+      error:
+        "This time overlaps with another order assigned to you, or this order can no longer be changed.",
+    };
+  }
+
+  revalidatePath(`/worker/orders/${orderId}`);
+  revalidatePath("/worker/dashboard");
+
+  return {
+    ok: true,
+    message: `Estimated time updated to ${minutes} minutes.`,
+  };
 }

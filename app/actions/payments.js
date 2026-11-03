@@ -4,6 +4,7 @@ import { db } from "@/lib/supabaseAdmin";
 import { requireRole } from "@/lib/auth";
 import { isUuid } from "@/lib/validate";
 import { normalizePhone, validPhone } from "@/lib/payment";
+import { sendEmail } from "@/lib/email";
 
 const done = (extra = {}) => { revalidatePath("/", "layout"); return { ok: true, ...extra }; };
 const actorOf = (s) => `admin:${s.accountId}`;
@@ -22,11 +23,64 @@ export async function approvePaymentAction(_prev, fd) {
   const id = String(fd.get("orderId"));
   if (!isUuid(id)) return { error: "Invalid order." };
   const { data, error } = await db.rpc("payment_approve", { p_order: id, p_admin: actorOf(s), p_note: txt(fd, "note", 1000) });
-  const r = data?.[0];
-  if (error || !r?.ok) return { error: "This payment cannot be approved (already processed?)." };
-  return done({ message: r.worker_id
+ const r = data?.[0];
+
+if (error || !r?.ok) {
+  return {
+    error: "This payment cannot be approved (already processed?).",
+  };
+}
+
+// If a worker was assigned, send the worker an email notification.
+// Email failure will NOT affect payment approval or order assignment.
+if (r.worker_id) {
+  try {
+    const { data: workerAccount } = await db
+      .from("worker_accounts")
+      .select("email, display_name")
+      .eq("worker_id", r.worker_id)
+      .eq("role", "worker")
+      .eq("status", "active")
+      .maybeSingle();
+
+    const { data: order } = await db
+      .from("orders")
+      .select("order_no, title, pages, deadline")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (workerAccount?.email) {
+      await sendEmail({
+        to: workerAccount.email,
+        subject: `New Order Assigned - #${order?.order_no ?? ""}`,
+        text: [
+          `Hi ${workerAccount.display_name || "Worker"},`,
+          "",
+          "A new order has been assigned to you.",
+          "",
+          `Order: #${order?.order_no ?? "-"}`,
+          `Title: ${order?.title ?? "-"}`,
+          `Pages: ${order?.pages ?? "-"}`,
+          `Deadline: ${order?.deadline ? new Date(order.deadline).toLocaleString("en-MY", { timeZone: "Asia/Kuala_Lumpur" }) : "-"}`,
+          "",
+          "Please log in to your Humanize Izzuleme worker dashboard to view the order.",
+          "",
+          "Humanize Izzuleme",
+        ].join("\n"),
+      });
+    } else {
+      console.warn(`Worker ${r.worker_id} has no email address. Email skipped.`);
+    }
+  } catch (emailError) {
+    console.error("Worker assignment email failed:", emailError);
+  }
+}
+
+return done({
+  message: r.worker_id
     ? "Payment approved and the order was assigned to a worker."
-    : "Payment approved. No eligible worker right now; the order is queued and will be assigned automatically." });
+    : "Payment approved. No eligible worker right now; the order is queued and will be assigned automatically.",
+});
 }
 
 export async function rejectPaymentAction(_prev, fd) {

@@ -6,6 +6,7 @@ import { requireRole } from "@/lib/auth";
 import { storeFiles, uploadRaw, removeUploaded, checkFile, DOC_TYPES, RECEIPT_TYPES } from "@/lib/files";
 import { normalizePhone, validPhone, pageCount } from "@/lib/payment";
 import { isUuid } from "@/lib/validate";
+import { sendEmail } from "@/lib/email";
 
 const ERR = {
   duplicate_receipt: "This receipt file has already been used. Please upload the receipt for THIS payment.",
@@ -131,8 +132,59 @@ if (!slotAvailable) {
     const code = Object.keys(ERR).find((k) => error?.message?.includes(k));
     return { error: code ? ERR[code] : "Could not submit the order. Please try again." };
   }
-  if (data[0].duplicate) await removeUploaded(d, r); // concurrent duplicate submit: keep the first
-  redirect(`/portal/orders/${data[0].order_id}`);
+  if (data[0].duplicate) {
+  await removeUploaded(d, r); // concurrent duplicate submit: keep the first
+} else {
+  // Send email notification to admin for a genuinely new order.
+  // Email failure must not stop the customer's order.
+  try {
+    const { data: admins, error: adminError } = await db
+      .from("worker_accounts")
+      .select("email")
+      .eq("role", "admin")
+      .eq("status", "active")
+      .not("email", "is", null);
+
+    if (adminError) {
+      console.error("Could not load admin emails:", adminError);
+    } else {
+      const adminEmails = [
+        ...new Set(
+          (admins || [])
+            .map((admin) => String(admin.email || "").trim())
+            .filter(Boolean)
+        ),
+      ];
+
+      if (adminEmails.length > 0) {
+        await sendEmail({
+          to: adminEmails,
+          subject: `New Humanize Order - ${title}`,
+          html: `
+            <h2>New order received</h2>
+            <p>A customer has submitted a new Humanize order.</p>
+
+            <p><strong>Title:</strong> ${title}</p>
+            <p><strong>Pages:</strong> ${from} - ${to} (${pages} pages)</p>
+            <p><strong>Style:</strong> ${style}</p>
+            <p><strong>Deadline:</strong> ${deadline.toLocaleString("en-MY", {
+              timeZone: "Asia/Kuala_Lumpur",
+            })}</p>
+            <p><strong>WhatsApp:</strong> ${phone}</p>
+
+            <p>The payment receipt is waiting for verification in the admin dashboard.</p>
+          `,
+        });
+      } else {
+        console.warn("Admin email skipped: no active admin email found.");
+      }
+    }
+  } catch (emailError) {
+    console.error("Admin order notification failed:", emailError);
+  }
+}
+
+redirect(`/portal/orders/${data[0].order_id}`);
 }
 
 export async function replaceReceiptAction(_prev, fd) {
