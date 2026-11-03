@@ -29,6 +29,7 @@ export async function createWorkerAction(_prev, fd) {
   if (dup) return { error: "That username is already taken." };
 
  const { data: w, error: e1 } = await db.from("workers").insert({
+  name: displayName || username,
   email,
   phone,
   orders: 0,
