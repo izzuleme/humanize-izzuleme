@@ -1,8 +1,9 @@
 "use client";
-import { useActionState, useEffect, useState, startTransition } from "react";
+import { useActionState, useEffect, useState, useRef, startTransition } from "react";
 import { createOrderAction, getPaymentInstructionsAction, checkSlotAvailabilityAction } from "@/app/actions/customer";
 import { btn, input } from "./ActionForm";
 import { pageCount, estimatePrice, refCode, whatsappLink } from "@/lib/payment";
+import { directUpload } from "@/lib/directUpload";
 
 const lbl = "block text-sm font-medium text-slate-700";
 
@@ -14,6 +15,13 @@ export default function NewOrderForm({ customerName, defaultPhone, whatsapp, rat
   const [contacted, setContacted] = useState(false);
   const [info, setInfo] = useState(null);
   const [hasReceipt, setHasReceipt] = useState(false);
+const [uploading, setUploading] = useState(false);
+const [uploadError, setUploadError] = useState("");
+const [uploadMessage, setUploadMessage] = useState("");
+const uploadedFiles = useRef({
+  document: null,
+  receipt: null,
+});
 const [slot, setSlot] = useState({
   checking: false,
   available: false,
@@ -84,12 +92,102 @@ if (waWindow) {
     setInfo(await getPaymentInstructionsAction());
   }
 
-  function onSubmit(e) {
+  
+  async function onSubmit(e) {
     e.preventDefault();
+
+    if (uploading || pending) return;
+
+    if (!key || !contacted || !hasReceipt) {
+      setUploadError("Please complete payment and upload your receipt.");
+      return;
+    }
+
+    if (slot.checking || !slot.available) {
+      setUploadError("Please choose an available deadline.");
+      return;
+    }
+
     const fd = new FormData(e.currentTarget);
-    fd.set("submission_key", key);
-    startTransition(() => formAction(fd)); // keeps the typed fields if the server rejects something
+    const documentFile = fd.get("document");
+    const receiptFile = fd.get("receipt");
+
+    if (!(documentFile instanceof File) || documentFile.size === 0) {
+      setUploadError("Please choose your original document.");
+      return;
+    }
+
+    if (!(receiptFile instanceof File) || receiptFile.size === 0) {
+      setUploadError("Please choose your payment receipt.");
+      return;
+    }
+
+    setUploading(true);
+    setUploadError("");
+
+    try {
+      
+      const fileIdentity = (file) =>
+        `${key}:${file.name}:${file.size}:${file.lastModified}`;
+
+      const documentIdentity = fileIdentity(documentFile);
+      const receiptIdentity = fileIdentity(receiptFile);
+
+      let documentUploadId;
+
+      if (uploadedFiles.current.document?.identity === documentIdentity) {
+        documentUploadId = uploadedFiles.current.document.id;
+      } else {
+        setUploadMessage("Uploading original document...");
+        documentUploadId = await directUpload(documentFile, "document", key);
+
+        uploadedFiles.current.document = {
+          identity: documentIdentity,
+          id: documentUploadId,
+        };
+      }
+
+      let receiptUploadId;
+
+      if (uploadedFiles.current.receipt?.identity === receiptIdentity) {
+        receiptUploadId = uploadedFiles.current.receipt.id;
+      } else {
+        setUploadMessage("Uploading payment receipt...");
+        receiptUploadId = await directUpload(receiptFile, "receipt", key);
+
+        uploadedFiles.current.receipt = {
+          identity: receiptIdentity,
+          id: receiptUploadId,
+        };
+      }
+
+
+      // Never send the actual file bytes through the server action.
+      fd.delete("document");
+      fd.delete("receipt");
+
+      fd.set("submission_key", key);
+      fd.set("document_upload_id", documentUploadId);
+      fd.set("receipt_upload_id", receiptUploadId);
+
+      setUploadMessage("Creating your order...");
+
+      startTransition(() => {
+        formAction(fd);
+      });
+    } catch (error) {
+      console.error("Direct upload failed:", error);
+      setUploadError(
+        error instanceof Error
+          ? error.message
+          : "Upload failed. Please try again."
+      );
+    } finally {
+      setUploading(false);
+      setUploadMessage("");
+    }
   }
+
 
   return (
     <form onSubmit={onSubmit} className="space-y-4">
@@ -175,9 +273,48 @@ if (waWindow) {
         <p className="text-sm text-slate-500">After contacting the admin and paying, you will upload your receipt here.</p>
       )}
 
-      {state?.error && <p role="alert" className="text-sm text-red-600">{state.error}</p>}
-      <button disabled={pending || !key || !contacted || !hasReceipt} className={btn}>{pending ? "Submitting…" : "Submit order"}</button>
-      <p className="text-xs text-slate-500">Your order is only passed to a worker after the admin verifies your payment.</p>
+            {uploadError && (
+        <p role="alert" className="text-sm text-red-600">
+          {uploadError}
+        </p>
+      )}
+
+      {state?.error && (
+        <p role="alert" className="text-sm text-red-600">
+          {state.error}
+        </p>
+      )}
+
+      {uploadMessage && (
+        <p role="status" className="text-sm font-medium text-blue-600">
+          {uploadMessage}
+        </p>
+      )}
+
+      <button
+        type="submit"
+        disabled={
+          uploading ||
+          pending ||
+          !key ||
+          !contacted ||
+          !hasReceipt ||
+          slot.checking ||
+          !slot.available
+        }
+        className={btn}
+      >
+        {uploading
+          ? "Uploading files..."
+          : pending
+          ? "Submitting..."
+          : "Submit order"}
+      </button>
+
+      <p className="text-xs text-slate-500">
+        Your order is only passed to a worker after the admin verifies your payment.
+      </p>
     </form>
   );
 }
+      

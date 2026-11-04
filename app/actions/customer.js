@@ -1,4 +1,5 @@
 "use server";
+import { preparePendingUpload } from "@/lib/pendingUploads";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/supabaseAdmin";
@@ -82,7 +83,8 @@ export async function createOrderAction(_prev, fd) {
   const phone = normalizePhone(fd.get("phone"));
   const note = String(fd.get("requirements") || "").trim();
   const deadline = new Date(String(fd.get("deadline") || "") + "+08:00"); // Malaysia time
-  const doc = fd.get("document"), receipt = fd.get("receipt");
+  const documentUploadId = String(fd.get("document_upload_id") || "");
+const receiptUploadId = String(fd.get("receipt_upload_id") || "");
 
   if (!isUuid(key)) return { error: "Please reload the page and try again." };
   if (title.length < 3 || title.length > 150) return { error: "Please give the order a title (3–150 chars)." };
@@ -110,40 +112,102 @@ if (!slotAvailable) {
     error: "No worker slot is available for this deadline. Please choose another date or time.",
   };
 }
-  const e1 = checkFile(doc, DOC_TYPES, 20 * 1048576, "Original document");
-  if (e1) return { error: e1 };
-  const e2 = checkFile(receipt, RECEIPT_TYPES, 10 * 1048576, "Payment receipt");
-  if (e2) return { error: "You must upload your payment receipt before submitting. " + e2 };
-
-  // Double-click / retry protection: same key -> same order, nothing uploaded.
-  const { data: existing } = await db.from("orders").select("id").eq("customer_id", s.accountId).eq("submission_key", key).maybeSingle();
-  if (existing) redirect(`/portal/orders/${existing.id}`);
-
-  const d = await uploadRaw({ orderKey: key, folder: "original", file: doc });
-  const r = await uploadRaw({ orderKey: key, folder: "receipt", file: receipt });
-  if (!d || !r) { await removeUploaded(d, r); return { error: "Upload failed. Please try again." }; }
-
-  const { data, error } = await db.rpc("create_manual_order", {
-    p_customer: s.accountId, p_key: key, p_title: title, p_from: from, p_to: to, p_total: total, p_style: style,
-    p_deadline: deadline.toISOString(), p_phone: phone, p_requirements: note, p_original: d, p_receipt: r,
-  });
-  if (error || !data?.[0]) {
-    await removeUploaded(d, r);
-    const code = Object.keys(ERR).find((k) => error?.message?.includes(k));
-    return { error: code ? ERR[code] : "Could not submit the order. Please try again." };
+  
+  if (!isUuid(documentUploadId) || !isUuid(receiptUploadId)) {
+    return { error: "Please upload your document and payment receipt." };
   }
-  if (data[0].duplicate) {
-  await removeUploaded(d, r); // concurrent duplicate submit: keep the first
-} else {
-  // Send email notification to admin for a genuinely new order.
-  // Email failure must not stop the customer's order.
+
+  // A retry with the same submission key must return the existing order.
+  const { data: existing, error: existingError } = await db
+    .from("orders")
+    .select("id")
+    .eq("customer_id", s.accountId)
+    .eq("submission_key", key)
+    .maybeSingle();
+
+  if (existingError) {
+    return { error: "Could not check your order. Please try again." };
+  }
+
+  if (existing) {
+    redirect(`/portal/orders/${existing.id}`);
+  }
+
+  let d = null;
+  let r = null;
+
   try {
-    const { data: admins, error: adminError } = await db
-      .from("worker_accounts")
-      .select("email")
-      .eq("role", "admin")
-      .eq("status", "active")
-      .not("email", "is", null);
+    d = await preparePendingUpload({
+      uploadId: documentUploadId,
+      customerId: s.accountId,
+      submissionKey: key,
+      kind: "document",
+    });
+
+    r = await preparePendingUpload({
+      uploadId: receiptUploadId,
+      customerId: s.accountId,
+      submissionKey: key,
+      kind: "receipt",
+    });
+  } catch (uploadError) {
+    await removeUploaded(d, r);
+    console.error("Preparing order files failed:", uploadError);
+
+    return {
+      error: "Could not prepare your uploaded files. Please try again.",
+    };
+  }
+
+
+  const { data, error } = await db.rpc("create_verified_order", {
+  p_customer: s.accountId,
+  p_key: key,
+  p_title: title,
+  p_from: from,
+  p_to: to,
+  p_total: total,
+  p_style: style,
+  p_deadline: deadline.toISOString(),
+  p_phone: phone,
+  p_requirements: note,
+
+  // Dua parameter baharu
+  p_document_upload_id: documentUploadId,
+  p_receipt_upload_id: receiptUploadId,
+
+  // Kekalkan dua parameter asal
+  p_original: d,
+  p_receipt: r,
+});
+
+  if (error || !data?.[0]) {
+    
+
+    const code = Object.keys(ERR).find((k) =>
+      error?.message?.includes(k)
+    );
+
+    return {
+      error: code
+        ? ERR[code]
+        : "Could not submit the order. Please try again.",
+    };
+  }
+
+  if (data[0].duplicate) {
+  // Do not delete files here.
+  // The database may already reference the finalized uploads.
+} else {
+    // Notify admin only when a genuinely new order is created.
+    try {
+      const { data: admins, error: adminError } = await db
+        .from("worker_accounts")
+        .select("email")
+        .eq("role", "admin")
+        .eq("status", "active")
+        .not("email", "is", null);
+
 
     if (adminError) {
       console.error("Could not load admin emails:", adminError);
